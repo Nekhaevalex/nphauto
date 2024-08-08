@@ -24,7 +24,7 @@ func init() {
 	// Parsing arguments
 	tablePath := flag.String("table", "data.csv", "path to table csv file")
 	frequency := flag.Int("int", 12, "tick time interval numeric part")
-	sQuanity := flag.String("dur", "h", "tick time interval quantity (h/m/s)")
+	sQuanity := flag.String("qty", "h", "tick time interval quantity (h/m/s)")
 	flag.Parse()
 
 	var quantity time.Duration
