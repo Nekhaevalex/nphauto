@@ -1,12 +1,17 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/csv"
 	"flag"
 	"fmt"
 	"log"
+	"math"
+	"net"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Nekhaevalex/nphauto/sensors/moisture"
@@ -44,6 +49,47 @@ func init() {
 		interval: time.Duration(*frequency),
 		quantity: quantity,
 	}
+}
+
+func setupOnDemandListener(ch chan float64) {
+	socket, err := net.Listen("unix", "/tmp/moisture.sock")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		os.Remove("/tmp/moisture.sock")
+		os.Exit(1)
+	}()
+
+	for {
+		conn, err := socket.Accept()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		go func(conn net.Conn) {
+			defer conn.Close()
+
+			buff := make([]byte, 128)
+			if _, err := conn.Read(buff); err != nil {
+				log.Fatal(err)
+			}
+			ch <- 1.0
+			reply := <-ch
+
+			var bf []byte
+
+			binary.LittleEndian.PutUint64(bf, math.Float64bits(reply))
+			if _, err := conn.Write(bf); err != nil {
+				log.Fatal(err)
+			}
+		}(conn)
+	}
+
 }
 
 func main() {
@@ -91,6 +137,10 @@ func main() {
 		}
 	}()
 
+	// Start on-demand value process
+	onDemand := make(chan float64, 1)
+	go setupOnDemandListener(onDemand)
+
 	// Reading loop
 	for {
 		select {
@@ -114,6 +164,27 @@ func main() {
 			if err = writer.Error(); err != nil {
 				log.Fatal(err)
 			}
+		case <-onDemand:
+			err = ms.Read(&data)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			now := fmt.Sprintf("%d", time.Now().Unix())
+			val := fmt.Sprintf("%f", data)
+
+			fmt.Printf("%s: %f (on demand)\n", time.Now().String(), data)
+
+			if err = writer.Write([]string{now, val}); err != nil {
+				log.Fatal(err)
+			}
+
+			writer.Flush()
+			if err = writer.Error(); err != nil {
+				log.Fatal(err)
+			}
+
+			onDemand <- data
 		case <-done:
 			// On finish
 			return
